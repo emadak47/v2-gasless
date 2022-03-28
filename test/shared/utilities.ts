@@ -1,6 +1,15 @@
-import { Contract } from 'ethers'
+import { Contract, Wallet } from 'ethers'
 import { Web3Provider } from 'ethers/providers'
-import { BigNumber, bigNumberify, keccak256, defaultAbiCoder, toUtf8Bytes, solidityPack } from 'ethers/utils'
+import {
+  BigNumber,
+  bigNumberify,
+  keccak256,
+  defaultAbiCoder,
+  toUtf8Bytes,
+  solidityPack,
+  FunctionDescription,
+} from 'ethers/utils'
+import { signTypedData_v4, TypedMessage } from 'eth-sig-util'
 
 export const MINIMUM_LIQUIDITY = bigNumberify(10).pow(3)
 
@@ -74,4 +83,83 @@ export async function mineBlock(provider: Web3Provider, timestamp: number): Prom
 
 export function encodePrice(reserve0: BigNumber, reserve1: BigNumber) {
   return [reserve1.mul(bigNumberify(2).pow(112)).div(reserve0), reserve0.mul(bigNumberify(2).pow(112)).div(reserve1)]
+}
+
+interface MessageTypeProperty {
+  name: string
+  type: string
+}
+
+interface MessageTypes {
+  EIP712Domain: MessageTypeProperty[]
+  [additionalProperties: string]: MessageTypeProperty[]
+}
+
+export function getFunctionSignature( functionAbi: FunctionDescription, params: any[]): string {
+  return functionAbi.encode(params);
+}
+
+export function getTransactionData(
+  nonce: string,
+  user: Wallet,
+  functionAbi: FunctionDescription,
+  params: any[],
+  verifyingContract: string
+): {
+  r: string, 
+  s: string, 
+  v: number, 
+  functionSignature: string
+}  {
+  const domainType = [
+    { name: "name", type: "string" },
+    { name: "version", type: "string" },
+    { name: "chainId", type: "uint256" },
+    { name: "verifyingContract", type: "address" }
+  ];
+  const metaTransactionType = [
+    { name: "nonce", type: "uint256" },
+    { name: "from", type: "address" },
+    { name: "functionSignature", type: "bytes" }
+  ];
+  const domainData = {
+    name: "UniswapV2",
+    version: "1",
+    verifyingContract: verifyingContract,
+    chainId: 1337
+  };
+  const functionSignature: string = getFunctionSignature(functionAbi, params);
+  const message: Record<string, unknown> = {
+    nonce: parseInt(nonce),
+    from: user.address,
+    functionSignature: functionSignature
+  };
+
+  const data: TypedMessage<MessageTypes> = {
+    types: {
+      EIP712Domain: domainType,
+      MetaTransaction: metaTransactionType
+    },
+    primaryType: 'MetaTransaction',
+    message: message,
+    domain: domainData
+  };
+
+  const signature: string = signTypedData_v4(
+    Buffer.from(user.privateKey.substring(2, 66), 'hex'),
+    { data: data }
+  );
+
+  let r: string = signature.slice(0, 66);
+  let s: string = "0x".concat(signature.slice(66, 130));
+  let vHex: string = "0x".concat(signature.slice(130, 132));
+  let v: number = parseInt(vHex);
+  if (![27, 28].includes(v)) v += 27;
+
+  return {
+    r,
+    s,
+    v,
+    functionSignature,
+  };
 }
